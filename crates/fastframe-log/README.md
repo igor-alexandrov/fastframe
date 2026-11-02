@@ -40,8 +40,10 @@ Lines look like `[2026-09-25T10:00:00Z WARN zapfast::backend] message`.
 ## Panics
 
 `log_panics` (called by `init` when `.panic_log` is set) replaces the default
-panic hook. Each panic appends one line to the panic log (readable by the
-user alone on Unix, as the log is) and prints it to stderr:
+panic hook. Each panic appends one line to the panic log and prints it to
+stderr. On Unix the panic log is readable by the user alone, as the log is,
+unless it is a link (the file it leads to keeps its own permissions) or its
+mode cannot be changed:
 
 ```text
 2026-09-25T10:00:00Z zapfast 0.16.3 on thread "main", panic at src/app.rs:10:5 (payload omitted)

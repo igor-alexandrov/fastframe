@@ -92,11 +92,16 @@ pub(crate) fn make_folder(path: &Path) -> std::io::Result<()> {
 /// Makes the log at `path` readable by the user alone (0600 on Unix), as far
 /// as the system lets the user change it. A link there is left alone, as
 /// [`restrict`] says.
+///
+/// Changing the mode needs no access to what the file holds, but the change
+/// goes through an open file: one the user may not read is opened for
+/// writing instead, without changing it.
 #[cfg(feature = "logger")]
 pub(crate) fn make_private(path: &Path) {
     #[cfg(unix)]
     if std::fs::symlink_metadata(path).is_ok_and(|found| found.is_file())
         && let Ok(file) = std::fs::File::open(path)
+            .or_else(|_| std::fs::OpenOptions::new().append(true).open(path))
     {
         restrict(&file, path);
     }
@@ -214,6 +219,46 @@ mod tests {
             unnamed,
             "t spotifast 0.10.1 on thread \"unnamed\", panic at unknown location (payload omitted)\n"
         );
+    }
+
+    /// A panic log an older version left readable by others is the user's
+    /// alone once it is opened again.
+    #[cfg(unix)]
+    #[test]
+    fn an_existing_panic_log_others_could_read_is_made_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("fastframe-log-panic-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("panic.log");
+        std::fs::write(&path, "an earlier panic\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let file = open_private(&path, std::fs::OpenOptions::new().create(true).append(true));
+        let mode = crate::tests::mode(&path);
+        std::fs::remove_dir_all(dir).unwrap();
+        file.unwrap();
+        assert_eq!(mode, 0o600);
+    }
+
+    /// A kept log the user may write but not read (0244) still loses the
+    /// others' read access.
+    #[cfg(all(unix, feature = "logger"))]
+    #[test]
+    fn a_kept_log_the_user_cannot_read_is_made_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir =
+            std::env::temp_dir().join(format!("fastframe-log-unreadable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("app.previous.log");
+        std::fs::write(&path, "the run that hung\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o244)).unwrap();
+        make_private(&path);
+        let mode = crate::tests::mode(&path);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let kept = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+        assert_eq!(mode, 0o600);
+        assert_eq!(kept, "the run that hung\n", "nothing written or cut");
     }
 
     /// The real hook, end to end: the file gets the line, never the payload.
